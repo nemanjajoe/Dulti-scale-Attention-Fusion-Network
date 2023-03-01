@@ -235,25 +235,23 @@ class DownSample(nn.Module):
     def __init__(self,dim_in,dim_out=None, norm_layer=nn.LayerNorm,act_layer=nn.GELU) -> None:
         super().__init__()
         self.dim_in = dim_in
-        self.dim_out = dim_out or dim_in
+        self.dim_out = dim_out or 2*dim_in
         self.down_conv = nn.Conv2d(self.dim_in,self.dim_out,7,2,3)
         self.norm = norm_layer(self.dim_out)
         self.conv1 = nn.Conv2d(self.dim_out, 2*self.dim_out,1)
-        self.act = act_layer()
+        self.act = act_layer(2*self.dim_out)
+        # self.act_grn = GRN()
         self.conv2 = nn.Conv2d(2*self.dim_out,self.dim_out,1)
 
-    def forward(self,att,x):
+    def forward(self,x):
         """
         Args:
-            att: B H*W C
             x  : B H*W C
         Returns:
-            x  : B (H/2)(W/2) 4C
+            x  : B (H/2)(W/2) 2C
         """
-        assert(att.shape == x.shape)
-        B,L,C = att.shape
+        B,L,C = x.shape
         H = W = int(np.sqrt(L))
-        x = torch.cat([att,x],dim=-1)
         x = rearrange(x,"b (h w) c -> b c h w", h=H,w=W)
         x = self.down_conv(x)
         t = self.norm(x)
@@ -264,7 +262,31 @@ class DownSample(nn.Module):
         return rearrange(x,"b c h w -> b (h w) c")
         
 class UpSample(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self,dim_in, dim_out=None, norm_layer=nn.LayerNorm, act_layer=nn.GELU) -> None:
         super().__init__()
-
+        self.dim_in = dim_in
+        self.dim_out= dim_out or dim_in//2
+        self.up_conv = nn.ConvTranspose2d(self.dim_in,self.dim_out,7,2,3)
+        self.norm = norm_layer(self.dim_out)
+        self.conv1 = nn.Conv2d(self.dim_out,2*self.dim_out,1)
+        self.act = act_layer(2*self.dim_out)
+        self.conv2 = nn.Conv2d(2*self.dim_out,self.dim_out,1)
+    
+    def forward(self,x):
+        """
+        Args:
+            x: B H*W C
+        Returns:
+            x: B (2H)*(2W) C//2
+        """
+        B,L,C = x.shape
+        H = W = int(np.sqrt(L))
+        x = rearrange(x,"b (h w) c -> b c h w",h=H, w=W)
+        x = self.up_conv(x)
+        t = self.norm(x)
+        t = self.conv1(t)
+        t = self.act(t)
+        x = self.conv2(t) + x
+        
+        return rearrange(x,"b c h w -> b (h w) c")
 
