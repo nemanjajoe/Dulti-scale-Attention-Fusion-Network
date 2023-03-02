@@ -93,6 +93,8 @@ class EfficentLePE(nn.Module):
             exit(0)
         self.H_sp = H_sp
         self.W_sp = W_sp
+        # print(dim)
+        # exit(0)
         self.get_v = nn.Conv2d(dim,dim,kernel_size=3,stride=1,padding=1,groups=dim)
 
     def im2cswin(self,x):
@@ -162,7 +164,7 @@ class CSWinBlock(nn.Module):
             ])
         else:
             self.attns = nn.ModuleList([
-                EfficentLePE(dim, res, i, split_size, num_heads, qk_scale)
+                EfficentLePE(dim//2, res, i, split_size, num_heads, qk_scale)
             for i in range(self.branch_num)
             ])
 
@@ -217,6 +219,7 @@ class DualBlock(nn.Module):
         or 
             x : B L C (if last stage)
         """
+        # print(self.res**2, x_h.shape[1])
         assert(self.res*self.res == x_h.shape[1]) # H*W == L
         assert(self.res*self.res == x_l.shape[1]) # H*W == L
         t_h = self.block_h(x_h)
@@ -232,61 +235,56 @@ class DualBlock(nn.Module):
         return x_h, x_l
 
 class DownSample(nn.Module):
-    def __init__(self,dim_in,dim_out=None, norm_layer=nn.LayerNorm,act_layer=nn.GELU) -> None:
+    def __init__(self,res,dim_in,dim_out=None, norm_layer=nn.LayerNorm,act_layer=nn.GELU) -> None:
         super().__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out or 2*dim_in
         self.down_conv = nn.Conv2d(self.dim_in,self.dim_out,7,2,3)
-        self.norm = norm_layer(self.dim_out)
+        self.norm = norm_layer([self.dim_out,res//2,res//2])
         self.conv1 = nn.Conv2d(self.dim_out, 2*self.dim_out,1)
-        self.act = act_layer(2*self.dim_out)
+        self.act = act_layer()
         # self.act_grn = GRN()
         self.conv2 = nn.Conv2d(2*self.dim_out,self.dim_out,1)
 
     def forward(self,x):
         """
         Args:
-            x  : B H*W C
+            x  : B C H W
         Returns:
-            x  : B (H/2)(W/2) 2C
+            x  : B 2C (H/2) (W/2) 
         """
-        B,L,C = x.shape
-        H = W = int(np.sqrt(L))
-        x = rearrange(x,"b (h w) c -> b c h w", h=H,w=W)
         x = self.down_conv(x)
         t = self.norm(x)
         t = self.conv1(t)
         t = self.act(t)
         x = self.conv2(t) + x
         
-        return rearrange(x,"b c h w -> b (h w) c")
+        return x
         
 class UpSample(nn.Module):
-    def __init__(self,dim_in, dim_out=None, norm_layer=nn.LayerNorm, act_layer=nn.GELU) -> None:
+    def __init__(self,res,dim_in, dim_out=None, norm_layer=nn.LayerNorm, act_layer=nn.GELU) -> None:
         super().__init__()
         self.dim_in = dim_in
         self.dim_out= dim_out or dim_in//2
         self.up_conv = nn.ConvTranspose2d(self.dim_in,self.dim_out,7,2,3)
-        self.norm = norm_layer(self.dim_out)
+        self.norm = norm_layer([self.dim_out,res*2,res*2])
         self.conv1 = nn.Conv2d(self.dim_out,2*self.dim_out,1)
-        self.act = act_layer(2*self.dim_out)
+        self.act = act_layer()
         self.conv2 = nn.Conv2d(2*self.dim_out,self.dim_out,1)
     
     def forward(self,x):
         """
         Args:
-            x: B H*W C
+            x: B C H W
         Returns:
-            x: B (2H)*(2W) C//2
+            x: B C//2 (2H) (2W)
         """
-        B,L,C = x.shape
-        H = W = int(np.sqrt(L))
-        x = rearrange(x,"b (h w) c -> b c h w",h=H, w=W)
-        x = self.up_conv(x)
+        B,C,H,W = x.shape
+        x = self.up_conv(x,output_size=torch.Size((B,C//2,2*H,2*W)))
         t = self.norm(x)
         t = self.conv1(t)
         t = self.act(t)
         x = self.conv2(t) + x
         
-        return rearrange(x,"b c h w -> b (h w) c")
+        return x
 
