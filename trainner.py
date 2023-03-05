@@ -8,6 +8,7 @@ import math
 import os
 import random
 import numpy as np
+import pandas as pd
 import torch
 import time
 
@@ -62,6 +63,28 @@ def validate_epoch(model, criterion, validate_list, validate_loader_args,num_cla
 
     return running_loss/length, dice_class/length
 
+
+def test_epoch(model, criterion, test_list, validate_loader_args,num_classes, device):
+    dataset = Synapse_dataset(test_list, RandomTransform((224,224)))
+    data_loader = DataLoader(dataset, **validate_loader_args)
+    running_loss, dice_class = 0, torch.zeros(num_classes)
+    length = len(data_loader)
+    with torch.no_grad():
+      model.eval()
+
+      for idx, (x, y) in enumerate(data_loader):
+        x = x.to(device)
+        y = y.to(device)
+        y_ = model(x)
+        loss = criterion(y_, y)
+
+        running_loss += loss
+        dice_class += criterion.get_dice_class()
+    return running_loss/length, dice_class/length
+
+
+
+
 class Trainer_synapse():
   def __init__(self, dataset_path:str, hyper):
     super().__init__()
@@ -88,21 +111,28 @@ class Trainer_synapse():
     names = [(os.path.join(images_path, name), os.path.join(label_path, name)) 
               for name in os.listdir(os.path.join(dataset_path, 'train/images/'))]
     random.shuffle(names)
-    self.train_list = names[:math.floor(len(names)*0.8)]
-    self.validate_list = names[math.floor(len(names)*0.8):]
-  
+    self.train_list = names[:math.floor(len(names)*0.7)]
+    self.validate_list = names[math.floor(len(names)*0.7):]
+    test_img_path = os.path.join(self.dataset_base_dir,"test_slice/images")
+    test_label_path = os.path.join(self.dataset_base_dir,"test_slice/labels")
+    names = [(os.path.join(test_img_path, name), os.path.join(test_label_path, name)) 
+              for name in os.listdir(os.path.join(dataset_path, 'test_slice/images/'))]
+    random.shuffle(names)
+    self.test_list = names
+
     #---------- get dataloader args ----------
     self.train_loader_args = hyper['train_loader_args'] if 'train_loader_args' in hyper else {}
     self.validate_loader_args = hyper['validate_loader_args'] if 'validate_loader_args' in hyper else {}
+    self.test_loader_args = hyper['validate_loader_args'] if 'validate_loader_args' in hyper else {}
 
     #---------- other configurations ----------
     self.eval_frequncy = hyper['eval_frequncy'] or 2
     self.save_path = hyper['save_path']
     self.save_epoch_path = os.path.join(self.save_path, 'best_epoch.pth')
 
-    if os.path.exists(self.save_epoch_path):
-      date = time.strftime("%Y%m%d_%H%M",time.localtime(time.time()))
-      os.rename(self.save_epoch_path,os.path.join(self.save_path,f'best_epoch_{date}.pth'))
+    # if os.path.exists(self.save_epoch_path):
+    #   date = time.strftime("%Y%m%d_%H%M",time.localtime(time.time()))
+    #   os.rename(self.save_epoch_path,os.path.join(self.save_path,f'best_epoch_{date}.pth'))
 
     self.labels = {0: 'background',  1: 'spleen',      2: 'right kidney',
                    3: 'left kidney', 4: 'gallbladder', 5: 'liver',
@@ -121,11 +151,23 @@ class Trainer_synapse():
 
     print('Synapse Trainer initalied !')
 
-  def test(self):
+  def test_model(self):
     train_epoch(self.model,self.criterion,self.optimizer,self.train_list,self.train_loader_args,self.device)
     print('train epoch success !')
     validate_epoch(self.model,self.criterion,self.validate_list,self.validate_loader_args,self.num_classes,self.device,self.scheduler)
     print('validate epoch success !')
+  
+  def get_test_result(self):
+    test_loss, dice_ = test_epoch(self.model,self.criterion,self.test_list,self.validate_loader_args,self.num_classes,self.device)
+    dice_ = list(np.asarray(dice_))
+    labels = [label for label in self.labels.values()][:self.num_classes]
+    result = {}
+    for i, organ in enumerate(labels):
+            result.update({organ:f"{dice_[i]:.4f}"})
+            print(f'\t\t {organ} : {dice_[i]:.4f}')
+
+    pd.Series(result).to_csv(os.path.join(sekf))
+    return result
 
   def train(self, continue_train=False, test_epoch=None):
 
@@ -143,7 +185,7 @@ class Trainer_synapse():
       epoch_start = params['epoch']
       self.train_list = params['train_samples']
       self.validate_list = params['validate_samples']
-      print(f'continue trainning from epoch {epoch_start}')
+      print(f'continue training from epoch {epoch_start}')
       for i, organ in enumerate(labels):
         print(f'\t {organ} : {dice_list[i]}')
 

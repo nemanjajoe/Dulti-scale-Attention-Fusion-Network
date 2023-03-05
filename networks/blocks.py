@@ -93,8 +93,7 @@ class EfficentLePE(nn.Module):
             exit(0)
         self.H_sp = H_sp
         self.W_sp = W_sp
-        # print(dim)
-        # exit(0)
+
         self.get_v = nn.Conv2d(dim,dim,kernel_size=3,stride=1,padding=1,groups=dim)
 
     def im2cswin(self,x):
@@ -105,21 +104,6 @@ class EfficentLePE(nn.Module):
         x = x.reshape(-1, self.H_sp* self.W_sp, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3).contiguous()
         return x
     
-    def get_lepe(self, x, func):
-        B, N, C = x.shape
-        H = W = int(np.sqrt(N))
-        x = x.transpose(-2,-1).contiguous().view(B, C, H, W)
-
-        H_sp, W_sp = self.H_sp, self.W_sp
-        x = x.view(B, C, H // H_sp, H_sp, W // W_sp, W_sp)
-        x = x.permute(0, 2, 4, 1, 3, 5).contiguous().reshape(-1, C, H_sp, W_sp) ### B', C, H', W'
-
-        lepe = func(x) ### B', C, H', W'
-        lepe = lepe.reshape(-1, self.num_heads, C // self.num_heads, H_sp * W_sp).permute(0, 1, 3, 2).contiguous()
-
-        x = x.reshape(-1, self.num_heads, C // self.num_heads, self.H_sp* self.W_sp).permute(0, 1, 3, 2).contiguous()
-        return x, lepe
-    
     def forward(self,qkv):
         q,k,v = qkv[0],qkv[1],qkv[2]
         B,L,C = q.shape
@@ -127,7 +111,20 @@ class EfficentLePE(nn.Module):
         assert(L == H*W)
         k = self.im2cswin(k)
         v = self.im2cswin(v)
-        q, lepe = self.get_lepe(q,self.get_v)
+
+        # get lepe start
+        q = q.transpose(-2,-1).contiguous().view(B, C, H, W)
+
+        H_sp, W_sp = self.H_sp, self.W_sp
+        q = q.view(B, C, H // H_sp, H_sp, W // W_sp, W_sp)
+        q = q.permute(0, 2, 4, 1, 3, 5).contiguous().reshape(-1, C, H_sp, W_sp) ### B', C, H', W'
+
+        lepe = self.get_v(q) ### B', C, H', W'
+        lepe = lepe.reshape(-1, self.num_heads, C // self.num_heads, H_sp * W_sp).permute(0, 1, 3, 2).contiguous()
+
+        q = q.reshape(-1, self.num_heads, C // self.num_heads, self.H_sp* self.W_sp).permute(0, 1, 3, 2).contiguous()
+        # get lepe end
+
         att = k.transpose(-2,-1)@v * self.scale
         att = nn.functional.softmax(att,dim=-1,dtype=att.dtype)
 

@@ -171,8 +171,8 @@ class Decoder(nn.Module):
         return x
 
 class DAFN(nn.Module):
-    def __init__(self, img_size=224, dim_in=1, dim_out=9, embed_dim=32,
-                 split_size=[1,2,7], num_heads=[2,4,8],qkv_bias=False, qk_scale=None,
+    def __init__(self, img_size=224, dim_in=1, dim_out=9, embed_dim=16,
+                 split_size=[1,2,2,7], num_heads=[2,4,8,16],qkv_bias=False, qk_scale=None,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
         super().__init__()
         self.encoder = Encoder(img_size,dim_in,embed_dim,split_size,num_heads,
