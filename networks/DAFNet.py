@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from einops.layers.torch import Rearrange
-from .blocks import DownSample,UpSample,DualBlock
+from .blocks import DownSample,UpSample,DualBlock,ShiftPatchMerge
 from thop import profile, clever_format
 
 
@@ -12,23 +12,21 @@ class EncoderFusionStage(nn.Module):
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm, last_stage=False) -> None:
         super().__init__()
         self.last_stage = last_stage
-        self.conv_h = DownSample(res,dim_in=dim_in,dim_out=dim_out,norm_layer=norm_layer,act_layer=act_layer)
-        self.conv_l = DownSample(res,dim_in=dim_in,dim_out=dim_out,norm_layer=norm_layer,act_layer=act_layer)
+        self.shift_patch_merging = ShiftPatchMerge(dim_in,res)
         res = res//2
-        self.dual_fusion = DualBlock(dim_out,res,split_size_h,split_size_l,num_heads_h,num_heads_l,
+        self.dual_fusion = DualBlock(dim_out//2,res,split_size_h,split_size_l,num_heads_h,num_heads_l,
                                      qkv_bias,qk_scale,act_layer,norm_layer,last_stage)
         self.img2token = Rearrange("b c h w -> b (h w) c")
         self.token2img = Rearrange("b (h w) c -> b c h w", h=res,w=res)
 
-    def forward(self,x_h,x_l):
+    def forward(self,x):
         """
         Args:
-            x_h,x_l: B C H W
+            x: B C H W
         Returns:
-            att_h,att_l: B C H W
+            att: B C H W
         """
-        x_h = self.conv_h(x_h)
-        x_l = self.conv_l(x_l)
+        x_h, x_l = self.shift_patch_merging(x)
         
         if self.last_stage:
             att = self.dual_fusion(self.img2token(x_h),self.img2token(x_l))
@@ -40,7 +38,7 @@ class EncoderFusionStage(nn.Module):
         att_h = self.token2img(att_h) + x_h
         att_l = self.token2img(att_l) + x_l
 
-        return att_h,att_l,x_l
+        return torch.cat([att_h,att_l], dim=1)
 
 class Encoder(nn.Module):
     def __init__(self, img_size=224, dim_in=1, embed_dim=32,
@@ -85,15 +83,10 @@ class Encoder(nn.Module):
         skips = []
         x = self.conv_embed(img)
         skips.append(x)
-        att_h,att_l,x = self.stages[0](x,x)
-        skips.append((att_h+att_l,x)) # (att_h + att_l)/2 ? 
 
-        for stage in self.stages[1:-1]:
-            att_h,att_l,x = stage(att_h,att_l)
-            skips.append((att_h+att_l,x))
-        
-        att_h,att_l,x = self.stages[-1](att_h,att_l)
-        skips.append((att_h,x))
+        for stage in self.stages:
+            x = stage(x)
+            skips.append(x)
 
         return tuple(skips)
 
@@ -107,9 +100,9 @@ class DecoderFusion(nn.Module):
                                      qkv_bias,qk_scale,act_layer,norm_layer,False)
         self.img2token = Rearrange("b c h w -> b (h w) c")
         self.token2img = Rearrange("b (h w) c -> b c h w", h=res,w=res)
-        self.deconv = UpSample(res,4*dim_in,dim_out,norm_layer,act_layer)
+        self.deconv = UpSample(res,3*dim_in,dim_out,norm_layer,act_layer)
     
-    def forward(self,att,x_l,x):
+    def forward(self,att,x):
         """
         Args:
             att: B C H W
@@ -123,7 +116,7 @@ class DecoderFusion(nn.Module):
         t_h,t_l = self.dual_fusion(t_h,t_l)
         t_h = self.token2img(t_h)
         t_l = self.token2img(t_l) # B C H W
-        x = torch.cat([x_l,t_h,t_l,x],dim=1) # cat in channel
+        x = torch.cat([t_h,t_l,x],dim=1) # cat in channel
         x = self.deconv(x)
 
         return x
@@ -157,13 +150,12 @@ class Decoder(nn.Module):
     def forward(self,skips):
         l = len(skips)
         for i in range(l - 1):
-            att,x_l = skips[-i-1]
+            att = skips[-i-1]
             if i == 0:
-                x = x_l
-            
+                x = att
             # print(att.shape,x_l.shape,x.shape)
             # exit(0)
-            x = self.stages[i](att,x_l,x)
+            x = self.stages[i](att,x)
         
         x = torch.cat([x,skips[0]],dim=1) # B 2C H W
         x = self.deconv_embed(x)

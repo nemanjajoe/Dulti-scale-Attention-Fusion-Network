@@ -58,7 +58,7 @@ class MlpMixer(nn.Module):
     def __init__(self,seq_len, dim) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
-        self.token_mixer = nn.Linear(seq_len,seq_len)
+        self.token_mixer = nn.Conv1d(dim,dim,1)
         self.act1 = nn.GELU()
         self.norm2 = nn.LayerNorm(dim)
         self.channel_mixer = nn.Linear(dim,dim)
@@ -257,7 +257,34 @@ class DownSample(nn.Module):
         x = self.conv2(t) + x
         
         return x
-        
+
+class ShiftPatchMerge(nn.Module):
+    def __init__(self, dim_in, res, shift=-1) -> None:
+        super().__init__()
+        self.conv_mixer = nn.Conv2d(dim_in,dim_in,3,1,1)
+        self.norm = nn.LayerNorm([dim_in,res,res])
+        self.conv_shift = nn.Conv2d(dim_in,dim_in,3,2,1)
+        self.act_shift = nn.GELU()
+        self.conv = nn.Conv2d(dim_in,dim_in,3,2,1)
+        self.act  = nn.GELU()
+        self.shift = shift
+    
+    def forward(self,x):
+        """
+        Args:
+            x : B C H W
+        Returns:
+            x_h,x_l = B 2C H/2, W/2
+        """
+        x = self.conv_mixer(x)
+        x = self.norm(x)
+        x_l = self.conv_shift(torch.roll(x,(self.shift,self.shift),(-1,-2)))
+        x_l = self.act_shift(x_l)
+        x_h = self.conv(x)
+        x_h = self.act(x_h)
+
+        return x_h, x_l
+
 class UpSample(nn.Module):
     def __init__(self,res,dim_in, dim_out=None, norm_layer=nn.LayerNorm, act_layer=nn.GELU) -> None:
         super().__init__()
