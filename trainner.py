@@ -74,6 +74,7 @@ def test_epoch(model, criterion, test_list, validate_loader_args,num_classes, de
 
       for idx, (x, y) in enumerate(data_loader):
         x = x.to(device)
+        
         y = y.to(device)
         y_ = model(x)
         loss = criterion(y_, y)
@@ -128,11 +129,16 @@ class Trainer_synapse():
     #---------- other configurations ----------
     self.eval_frequncy = hyper['eval_frequncy'] or 2
     self.save_path = hyper['save_path']
+    print(f'result will be saved on {self.save_path}')
     self.save_epoch_path = os.path.join(self.save_path, 'best_epoch.pth')
 
-    # if os.path.exists(self.save_epoch_path):
-    #   date = time.strftime("%Y%m%d_%H%M",time.localtime(time.time()))
-    #   os.rename(self.save_epoch_path,os.path.join(self.save_path,f'best_epoch_{date}.pth'))
+    if os.path.exists(self.save_epoch_path):
+       print("========================warning====================")
+       print("This config was trained before, best suggestion to change one!")
+       time.sleep(3)
+       print("====================================================")
+      # date = time.strftime("%Y%m%d_%H%M",time.localtime(time.time()))
+      # os.rename(self.save_epoch_path,os.path.join(self.save_path,f'best_epoch_{date}.pth'))
 
     self.labels = {0: 'background',  1: 'spleen',      2: 'right kidney',
                    3: 'left kidney', 4: 'gallbladder', 5: 'liver',
@@ -166,7 +172,6 @@ class Trainer_synapse():
             result.update({organ:f"{dice_[i]:.4f}"})
             print(f'\t\t {organ} : {dice_[i]:.4f}')
 
-    pd.Series(result).to_csv(os.path.join(sekf))
     return result
 
   def train(self, continue_train=False, test_epoch=None):
@@ -228,4 +233,12 @@ class Trainer_synapse():
           print(f'\t validate dice:')
           for i, organ in enumerate(labels):
             print(f'\t\t {organ} : {dice_[i]:.4f}')
+
+    result = self.get_test_result()
+    pd.Series(result).to_csv(os.path.join(self.save_path,"test_result.csv"))
+
+
+
+
+
 

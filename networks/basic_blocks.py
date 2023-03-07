@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 from einops.layers.torch import Rearrange
-from einops import rearrange
+from timm.models.layers import DropPath, to_2tuple, trunc_normal_
+from timm.models.registry import register_model
 
 def img2windows(img, H_sp, W_sp):
     """
@@ -68,6 +69,7 @@ class MlpMixer(nn.Module):
         """
             x: B L C
         """
+        # print(x.shape)
         t = self.norm1(x).transpose(-1,-2)
         x = self.token_mixer(t).transpose(-1,-2) + x
         x = self.channel_mixer(self.norm2(x)) + x
@@ -75,7 +77,7 @@ class MlpMixer(nn.Module):
         return x
 
 class EfficentLePE(nn.Module):
-    def __init__(self, dim, res, idx, split_size=7, num_heads=8, qk_scale=None) -> None:
+    def __init__(self, dim, res, idx, split_size=7, num_heads=8, qk_scale=None,attn_drop=0.) -> None:
         super().__init__()
         self.res = res
         self.split_size = split_size
@@ -95,6 +97,7 @@ class EfficentLePE(nn.Module):
         self.W_sp = W_sp
 
         self.get_v = nn.Conv2d(dim,dim,kernel_size=3,stride=1,padding=1,groups=dim)
+        self.drop_out = nn.Dropout(attn_drop)
 
     def im2cswin(self,x):
         B,L,C = x.shape
@@ -127,6 +130,7 @@ class EfficentLePE(nn.Module):
 
         att = k.transpose(-2,-1)@v * self.scale
         att = nn.functional.softmax(att,dim=-1,dtype=att.dtype)
+        att = self.drop_out(att)
 
         x = q@att +lepe
         x = x.transpose(1,2).reshape(-1,self.H_sp*self.W_sp,C)
@@ -137,6 +141,7 @@ class EfficentLePE(nn.Module):
 class CSWinBlock(nn.Module):
     def __init__(self, dim, res, num_heads, split_size,
                  qkv_bias=False, qk_scale=None, act_layer=nn.GELU,
+                 attn_drop=0.,
                  norm_layer=nn.LayerNorm,last_stage=False) -> None:
         super().__init__()
         self.dim = dim
@@ -156,14 +161,15 @@ class CSWinBlock(nn.Module):
 
         if last_stage:
             self.attns = nn.ModuleList([
-                EfficentLePE(dim, res, -1, split_size, num_heads, qk_scale)
+                EfficentLePE(dim, res, -1, split_size, num_heads, qk_scale,attn_drop)
             for i in range(self.branch_num)
             ])
         else:
             self.attns = nn.ModuleList([
-                EfficentLePE(dim//2, res, i, split_size, num_heads, qk_scale)
+                EfficentLePE(dim//2, res, i, split_size, num_heads, qk_scale,attn_drop)
             for i in range(self.branch_num)
             ])
+        
 
     def forward(self,x):
         """
@@ -188,13 +194,13 @@ class CSWinBlock(nn.Module):
         return att
 
 class DualBlock(nn.Module):
-    def __init__(self,dim, res, split_size_h,split_size_l,
-                 num_heads_h, num_heads_l, qkv_bias=False, qk_scale=None, act_layer=nn.GELU, 
+    def __init__(self,dim, res, split_size_h,split_size_l,num_heads_h, num_heads_l,
+                 attn_drop=0.,drop_path=0., qkv_bias=False, qk_scale=None, act_layer=nn.GELU, 
                  norm_layer=nn.LayerNorm,last_stage=False) -> None:
         super().__init__()
-        self.block_h = CSWinBlock(dim,res,num_heads_h,split_size_h,qkv_bias,qk_scale,act_layer,norm_layer,last_stage)
+        self.block_h = CSWinBlock(dim,res,num_heads_h,split_size_h,qkv_bias,qk_scale,act_layer,attn_drop,norm_layer,last_stage)
         self.mixer_h = MlpMixer(res*res,dim)
-        self.block_l = CSWinBlock(dim,res,num_heads_l,split_size_l,qkv_bias,qk_scale,act_layer,norm_layer,last_stage)
+        self.block_l = CSWinBlock(dim,res,num_heads_l,split_size_l,qkv_bias,qk_scale,act_layer,attn_drop,norm_layer,last_stage)
         self.mixer_l = MlpMixer(res*res,dim)
         self.last_stage = last_stage
         self.res = res
@@ -205,31 +211,91 @@ class DualBlock(nn.Module):
                 Rearrange("b c h w -> b (h w) c"),
                 nn.LayerNorm(dim)
             )
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
     def forward(self,x_h, x_l):
         """
         Args:
             x_h: B L C (high resolution features)
             x_l: B L C (low resolution features)
         Returns:
-            x_h: B L C
-            x_l: B L C 
-        or 
-            x : B L C (if last stage)
+            x_h,x_l : B L C
         """
         # print(self.res**2, x_h.shape[1])
         assert(self.res*self.res == x_h.shape[1]) # H*W == L
         assert(self.res*self.res == x_l.shape[1]) # H*W == L
         t_h = self.block_h(x_h)
         t_l = self.block_l(x_l)
-        m_h = self.mixer_h(t_h + x_l)
-        m_l = self.mixer_l(t_l + x_h)
-        x_h = m_h + t_l
-        x_l = m_l + t_h
-        if self.last_stage:
-            x = torch.cat([x_h,x_l], dim=-1)
-            x = self.merge(x)
-            return x
-        return x_h, x_l
+        m_h = self.mixer_h(self.drop_path(t_h) + x_l)
+        m_l = self.mixer_l(self.drop_path(t_l) + x_h)
+        x_h = self.drop_path(m_h) + t_l
+        x_l = self.drop_path(m_l) + t_h
+        
+        return x_h,x_l
+
+class DualFusionBlockMerge(nn.Module):
+    def __init__(self,dim, res, split_size_h,split_size_l,num_heads_h, num_heads_l,
+                 attn_drop=0.,drop_path=0., qkv_bias=False, qk_scale=None, act_layer=nn.GELU, 
+                 norm_layer=nn.LayerNorm,last_stage=False) -> None:
+        super().__init__()
+        self.patch_merge = nn.Sequential(
+            Rearrange("b (h w) (n c) -> b h w c n", h=res,w=res,n=4),
+            Rearrange("b h w c (p1 p2) -> b (p1 h) (p2 w) c",p1=2,p2=2),
+            Rearrange("b h w c -> b (h w) c")
+        )
+        res = res*2
+        self.ffn = nn.Sequential(
+            nn.Linear(dim//2,dim//4),
+            nn.LayerNorm(dim//4)
+        )
+        dim = dim //4
+        self.dual_block = DualBlock(dim,res,split_size_h,split_size_l,num_heads_h,num_heads_l,
+                                    attn_drop,drop_path,qkv_bias,qk_scale,act_layer,norm_layer,last_stage)
+        
+    def forward(self,x_l,x_h):
+        """
+        Args:
+            x_l,x_h: B L C
+        Returns:
+            x: B L C
+        """
+        x_l = self.patch_merge(x_l)
+        x_h = self.ffn(x_h)
+        att_l,att_h = self.dual_block(x_l,x_h)
+        x_l = att_l + x_l
+        x_h = att_h + x_h
+        return torch.cat([x_l,x_h], dim=-1)
+
+class DualFusionBlock(nn.Module):
+    def __init__(self,dim, res, split_size_h,split_size_l,num_heads_h, num_heads_l,
+                 attn_drop=0.,drop_path=0., qkv_bias=False, qk_scale=None, act_layer=nn.GELU, 
+                 norm_layer=nn.LayerNorm,last_stage=False) -> None:
+        super().__init__()
+        self.ffn_l = nn.Sequential(
+           nn.Linear(dim, dim//2),
+           nn.LayerNorm(dim//2)
+        )
+        self.ffn_h = nn.Sequential(
+            nn.Linear(dim,dim//2),
+            nn.LayerNorm(dim//2)
+        )
+        dim = dim//2
+        self.dual_block = DualBlock(dim,res,split_size_h,split_size_l,num_heads_h,num_heads_l,
+                                    attn_drop,drop_path,qkv_bias,qk_scale,act_layer,norm_layer,last_stage)
+        
+    def forward(self,x_l,x_h):
+        """
+        Args:
+            x_l,x_h: B L C
+        Returns:
+            x: B L C
+        """
+        x_l = self.ffn_l(x_l)
+        x_h = self.ffn_h(x_h)
+        att_l,att_h = self.dual_block(x_l,x_h)
+        x_l = att_l + x_l
+        x_h = att_h + x_h
+        return torch.cat([x_l,x_h], dim=-1)
+
 
 class DownSample(nn.Module):
     def __init__(self,res,dim_in,dim_out=None, norm_layer=nn.LayerNorm,act_layer=nn.GELU) -> None:
