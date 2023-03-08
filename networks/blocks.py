@@ -259,7 +259,7 @@ class DownSample(nn.Module):
         return x
 
 class ShiftPatchMerge(nn.Module):
-    def __init__(self, dim_in, res, shift=0) -> None:
+    def __init__(self, dim_in, res, shift=1) -> None:
         super().__init__()
         self.conv_mixer = nn.Conv2d(dim_in,dim_in,3,1,1)
         self.norm = nn.LayerNorm([dim_in,res,res])
@@ -280,6 +280,7 @@ class ShiftPatchMerge(nn.Module):
         x = self.norm(x)
         x_l = self.conv_shift(torch.roll(x,(self.shift,self.shift),(-1,-2)))
         x_l = self.act_shift(x_l)
+        x_l = torch.roll(x_l,(-self.shift,-self.shift), (-1,-2))
         x_h = self.conv(x)
         x_h = self.act(x_h)
 
