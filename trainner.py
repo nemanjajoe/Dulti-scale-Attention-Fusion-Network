@@ -229,10 +229,22 @@ class Trainer_synapse():
             }
             torch.save(params, self.save_epoch_path)
 
-          print(f'\t validate loss: {val_loss.item():.4f}')
-          print(f'\t validate dice:')
+          msg_validate_loss = f'\t validate loss: {val_loss.item():.4f}'
+          msg_validate_dice = f'\t validate dice:'
+          print(msg_validate_loss)
+          print(msg_validate_dice)
+          if self.save_history:
+            with open(self.save_history_file_path,'a') as f:
+              f.write(f'{msg_validate_loss}\n')
+              f.write(f'{msg_validate_dice}\n')
+
           for i, organ in enumerate(labels):
-            print(f'\t\t {organ} : {dice_[i]:.4f}')
+            msg_organ_dice = f'\t\t {organ} : {dice_[i]:.4f}'
+            print(msg_organ_dice)
+            if self.save_history:
+              with open(self.save_history_file_path,'a') as f:
+                f.write(f'{msg_organ_dice}\n')
+
 
     result = self.get_test_result()
     date = time.strftime("%Y%m%d_%H%M",time.localtime(time.time()))

@@ -259,15 +259,15 @@ class DownSample(nn.Module):
         return x
 
 class ShiftPatchMerge(nn.Module):
-    def __init__(self, dim_in, res, shift=1) -> None:
+    def __init__(self, dim_in, res) -> None:
         super().__init__()
-        self.conv_mixer = nn.Conv2d(dim_in,dim_in,3,1,1)
+        self.conv_mixer = nn.Conv2d(dim_in,2*dim_in,3,1,1)
+        dim_in = 2*dim_in
         self.norm = nn.LayerNorm([dim_in,res,res])
-        self.conv_shift = nn.Conv2d(dim_in,dim_in,3,2,1)
-        self.act_shift = nn.GELU()
+        # self.conv_shift = nn.Conv2d(dim_in,dim_in,3,2,1)
+        # self.act_shift = nn.GELU()
         self.conv = nn.Conv2d(dim_in,dim_in,3,2,1)
         self.act  = nn.GELU()
-        self.shift = shift
     
     def forward(self,x):
         """
@@ -278,13 +278,13 @@ class ShiftPatchMerge(nn.Module):
         """
         x = self.conv_mixer(x)
         x = self.norm(x)
-        x_l = self.conv_shift(torch.roll(x,(self.shift,self.shift),(-1,-2)))
-        x_l = self.act_shift(x_l)
-        x_l = torch.roll(x_l,(-self.shift,-self.shift), (-1,-2))
-        x_h = self.conv(x)
-        x_h = self.act(x_h)
+        # x_l = self.conv_shift(x)
+        # x_l = self.act_shift(x_l)
+        x = self.conv(x)
+        x = self.act(x)
 
-        return x_h, x_l
+        _,C,_,_ = x.shape
+        return x[:,:C//2,:,:], x[:,C//2:,:,:]
 
 class UpSample(nn.Module):
     def __init__(self,res,dim_in, dim_out=None, norm_layer=nn.LayerNorm, act_layer=nn.GELU) -> None:
