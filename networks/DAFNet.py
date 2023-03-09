@@ -9,13 +9,17 @@ from thop import profile, clever_format
 class EncoderFusionStage(nn.Module):
     def __init__(self, dim_in, dim_out, res, split_size_h, split_size_l,
                  num_heads_h, num_heads_l, qkv_bias=False, qk_scale=None,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm, last_stage=False) -> None:
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm, last_stage=False,depth=1) -> None:
         super().__init__()
         self.last_stage = last_stage
         self.shift_patch_merging = ShiftPatchMerge(dim_in,res)
         res = res//2
-        self.dual_fusion = DualBlock(dim_out//2,res,split_size_h,split_size_l,num_heads_h,num_heads_l,
-                                     qkv_bias,qk_scale,act_layer,norm_layer,last_stage)
+        self.dual_fusion = []
+        for i in range(depth):
+            self.dual_fusion.append(DualBlock(dim_out//2,res,split_size_h,split_size_l,num_heads_h,num_heads_l,
+                                     qkv_bias,qk_scale,act_layer,norm_layer,last_stage))
+        
+        self.dual_fusion = nn.ModuleList(self.dual_fusion)
         self.img2token = Rearrange("b c h w -> b (h w) c")
         self.token2img = Rearrange("b (h w) c -> b c h w", h=res,w=res)
 
@@ -33,7 +37,9 @@ class EncoderFusionStage(nn.Module):
             att_h = att_l = self.token2img(att)
             return att_h,att_l,x_l
         else:
-            att_h,att_l = self.dual_fusion(self.img2token(x_h),self.img2token(x_l))
+            att_h,att_l = self.img2token(x_h),self.img2token(x_l)
+            for fusion in self.dual_fusion:
+                att_h, att_l = fusion(att_h, att_l)
         
         att_h = self.token2img(att_h) + x_h
         att_l = self.token2img(att_l) + x_l
@@ -42,28 +48,28 @@ class EncoderFusionStage(nn.Module):
 
 class Encoder(nn.Module):
     def __init__(self, img_size=224, dim_in=1, embed_dim=32,
-                 split_size=[1,2,7], num_heads=[2,4,8],qkv_bias=False, qk_scale=None,
+                 split_size=[1,2,7], num_heads=[2,4,8],depth=[1,3,8,3], qkv_bias=False, qk_scale=None,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
         super().__init__()
-        self.conv_embed = DownSample(img_size,dim_in=dim_in, dim_out=embed_dim, norm_layer=norm_layer,act_layer=act_layer)
         res = img_size//2
+        self.conv_embed = nn.Sequential(
+            nn.Conv2d(dim_in,embed_dim,3,2,1),
+            nn.LayerNorm([embed_dim,res,res])
+        )
         dim = embed_dim
         self.stages = []
         assert(len(split_size) == len(num_heads))
-        depth = len(split_size)
-        for i in range(depth):
+        stage_len = len(split_size)
+        for i in range(stage_len):
             last_stage = False
-            # if i == depth - 1:
-            #     last_stage=True
             
-            s_h = split_size[depth-i-1]
+            s_h = split_size[stage_len-i-1]
             s_l = split_size[i]
-            n_h = num_heads[depth-i-1]
+            n_h = num_heads[stage_len-i-1]
             n_l = num_heads[i]
 
-
             stage = EncoderFusionStage(dim,2*dim,res,s_h,s_l,n_h,n_l,qkv_bias,qk_scale,
-                                       act_layer,norm_layer,last_stage)
+                                       act_layer,norm_layer,last_stage,depth[i])
             res = res//2
             dim = dim*2
             self.stages.append(stage)
@@ -164,10 +170,10 @@ class Decoder(nn.Module):
 
 class DAFN(nn.Module):
     def __init__(self, img_size=224, dim_in=1, dim_out=9, embed_dim=16,
-                 split_size=[1,2,2,7], num_heads=[2,4,8,16],qkv_bias=False, qk_scale=None,
+                 split_size=[1,2,2,7], num_heads=[2,4,8,16],depth=[1,2,4,2],qkv_bias=False, qk_scale=None,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
         super().__init__()
-        self.encoder = Encoder(img_size,dim_in,embed_dim,split_size,num_heads,
+        self.encoder = Encoder(img_size,dim_in,embed_dim,split_size,num_heads,depth,
                                qkv_bias,qk_scale,act_layer,norm_layer)
         res = self.encoder.final_res
         dim = self.encoder.final_dim
