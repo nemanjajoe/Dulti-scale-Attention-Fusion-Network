@@ -367,7 +367,7 @@ DAFNet_synapse_version1_cls9_v11= {
 }
 
 DAFNet_synapse_version1_cls9_v12= {
-  'describe'  : "remove residual connection in DA transformer", 
+  'describe'  : "CSWin Transformer : asymmetric split horizontal and vertical map", 
   'save_path' : 'D:\\Projects\\results\\DAFNet\\version1_cls_9_v12',
   'device'    : 'cuda:0' if torch.cuda.is_available() else 'cpu',
   'epoch_num' : 240,

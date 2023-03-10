@@ -136,7 +136,7 @@ class EfficentLePE(nn.Module):
 
 class CSWinBlock(nn.Module):
     def __init__(self, dim, res, num_heads, split_size,
-                 qkv_bias=False, qk_scale=None, act_layer=nn.GELU,
+                 qkv_bias=False, qk_scale=None, switch=False,
                  norm_layer=nn.LayerNorm,last_stage=False) -> None:
         super().__init__()
         self.dim = dim
@@ -145,6 +145,7 @@ class CSWinBlock(nn.Module):
         self.split_size = split_size
         self.to_qkv = nn.Linear(dim, 3*dim, bias=qkv_bias)
         self.norm = norm_layer(dim)
+        self.switch = switch
 
         if self.patch_res == split_size:
             last_stage = True
@@ -179,8 +180,12 @@ class CSWinBlock(nn.Module):
 
         qkv = self.to_qkv(x).reshape(B,-1,3,C).permute(2,0,1,3)
         if self.branch_num == 2:
-            x1 = self.attns[0](qkv[:,:,:,:C//2])
-            x2 = self.attns[1](qkv[:,:,:,C//2:])
+            if self.switch:
+                x1 = self.attns[0](qkv[:,:,:,:C//2])
+                x2 = self.attns[1](qkv[:,:,:,C//2:])
+            else:
+                x1 = self.attns[0](qkv[:,:,:,C//2:])
+                x2 = self.attns[1](qkv[:,:,:,:C//2])
             att = torch.cat([x1,x2],dim=2)
         else:
             att = self.attns[0](qkv)
@@ -192,9 +197,9 @@ class DualBlock(nn.Module):
                  num_heads_h, num_heads_l, qkv_bias=False, qk_scale=None, act_layer=nn.GELU, 
                  norm_layer=nn.LayerNorm,last_stage=False) -> None:
         super().__init__()
-        self.block_h = CSWinBlock(dim,res,num_heads_h,split_size_h,qkv_bias,qk_scale,act_layer,norm_layer,last_stage)
+        self.block_h = CSWinBlock(dim,res,num_heads_h,split_size_h,qkv_bias,qk_scale,False,norm_layer,last_stage)
         self.mixer_h = MlpMixer(res*res,dim)
-        self.block_l = CSWinBlock(dim,res,num_heads_l,split_size_l,qkv_bias,qk_scale,act_layer,norm_layer,last_stage)
+        self.block_l = CSWinBlock(dim,res,num_heads_l,split_size_l,qkv_bias,qk_scale,True,norm_layer,last_stage)
         self.mixer_l = MlpMixer(res*res,dim)
         self.last_stage = last_stage
         self.res = res

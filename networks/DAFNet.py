@@ -48,7 +48,7 @@ class EncoderFusionStage(nn.Module):
 
 class Encoder(nn.Module):
     def __init__(self, img_size=224, dim_in=1, embed_dim=32,
-                 split_size=[1,2,7], num_heads=[2,4,8],depth=[1,3,8,3], qkv_bias=False, qk_scale=None,
+                 split_size=[1,2,2,7], num_heads=[2,4,8,16],depth=[2,3,8,3], qkv_bias=False, qk_scale=None,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
         super().__init__()
         res = img_size//2
