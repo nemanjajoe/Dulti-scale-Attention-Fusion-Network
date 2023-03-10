@@ -5,7 +5,7 @@ from trainner import Trainer_synapse
 from config import *
 
 dataset_path = "D:\\Projects\\datasets\\Synapse_npy"
-net = Trainer_synapse(dataset_path,DAFNet_synapse_version1_cls9_v12)
+# net = Trainer_synapse(dataset_path,DAFNet_synapse_version1_cls9_v13)
 
 # def print_model_size():
 #     x = torch.randn((2,1,224,224)).to(net.device)

@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from einops.layers.torch import Rearrange
 from .blocks import DownSample,UpSample,DualBlock,ShiftPatchMerge
+from .decoders import Decoder
 from thop import profile, clever_format
 
 
@@ -96,77 +97,77 @@ class Encoder(nn.Module):
 
         return tuple(skips)
 
-class DecoderFusion(nn.Module):
-    def __init__(self, dim_in, dim_out, res, split_size_h, split_size_l,
-                 num_heads_h, num_heads_l, qkv_bias=False, qk_scale=None,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
-        super().__init__()
-        # print(dim_in, res)
-        self.dual_fusion = DualBlock(dim_in,res,split_size_h,split_size_l,num_heads_h,num_heads_l,
-                                     qkv_bias,qk_scale,act_layer,norm_layer,False)
-        self.img2token = Rearrange("b c h w -> b (h w) c")
-        self.token2img = Rearrange("b (h w) c -> b c h w", h=res,w=res)
-        self.deconv = UpSample(res,3*dim_in,dim_out,norm_layer,act_layer)
+# class DecoderFusion(nn.Module):
+#     def __init__(self, dim_in, dim_out, res, split_size_h, split_size_l,
+#                  num_heads_h, num_heads_l, qkv_bias=False, qk_scale=None,
+#                  act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
+#         super().__init__()
+#         # print(dim_in, res)
+#         self.dual_fusion = DualBlock(dim_in,res,split_size_h,split_size_l,num_heads_h,num_heads_l,
+#                                      qkv_bias,qk_scale,act_layer,norm_layer,False)
+#         self.img2token = Rearrange("b c h w -> b (h w) c")
+#         self.token2img = Rearrange("b (h w) c -> b c h w", h=res,w=res)
+#         self.deconv = UpSample(res,3*dim_in,dim_out,norm_layer,act_layer)
     
-    def forward(self,att,x):
-        """
-        Args:
-            att: B C H W
-            x_l: B C H W
-            x  : B C H W
-        Returns:
-            x  : B C H W
-        """
-        t_h = self.img2token(att)
-        t_l = self.img2token(x)
-        t_h,t_l = self.dual_fusion(t_h,t_l)
-        t_h = self.token2img(t_h)
-        t_l = self.token2img(t_l) # B C H W
-        x = torch.cat([t_h,t_l,x],dim=1) # cat in channel
-        x = self.deconv(x)
+#     def forward(self,att,x):
+#         """
+#         Args:
+#             att: B C H W
+#             x_l: B C H W
+#             x  : B C H W
+#         Returns:
+#             x  : B C H W
+#         """
+#         t_h = self.img2token(att)
+#         t_l = self.img2token(x)
+#         t_h,t_l = self.dual_fusion(t_h,t_l)
+#         t_h = self.token2img(t_h)
+#         t_l = self.token2img(t_l) # B C H W
+#         x = torch.cat([t_h,t_l,x],dim=1) # cat in channel
+#         x = self.deconv(x)
 
-        return x
+#         return x
 
-class Decoder(nn.Module):
-    def __init__(self,res, dim_in, dim_out,
-                 split_size=[7,2,1], num_heads=[8,4,2],qkv_bias=False, qk_scale=None,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
-        super().__init__()
-        res = res
-        dim = dim_in
-        self.stages = []
-        assert(len(split_size) == len(num_heads))
-        depth = len(split_size)
-        for i in range(depth):
-            s_h = split_size[depth-i-1]
-            s_l = split_size[i]
-            n_h = num_heads[depth-i-1]
-            n_l = num_heads[i]
+# class Decoder(nn.Module):
+#     def __init__(self,res, dim_in, dim_out,
+#                  split_size=[7,2,1], num_heads=[8,4,2],qkv_bias=False, qk_scale=None,
+#                  act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
+#         super().__init__()
+#         res = res
+#         dim = dim_in
+#         self.stages = []
+#         assert(len(split_size) == len(num_heads))
+#         depth = len(split_size)
+#         for i in range(depth):
+#             s_h = split_size[depth-i-1]
+#             s_l = split_size[i]
+#             n_h = num_heads[depth-i-1]
+#             n_l = num_heads[i]
 
-            stage = DecoderFusion(dim,dim//2,res,s_h,s_l,n_h,n_l,qkv_bias,qk_scale,
-                                       act_layer,norm_layer)
-            res = res*2
-            dim = dim//2
-            self.stages.append(stage)
-        # self.stages.reverse()
-        self.stages = nn.ModuleList(self.stages)
+#             stage = DecoderFusion(dim,dim//2,res,s_h,s_l,n_h,n_l,qkv_bias,qk_scale,
+#                                        act_layer,norm_layer)
+#             res = res*2
+#             dim = dim//2
+#             self.stages.append(stage)
+#         # self.stages.reverse()
+#         self.stages = nn.ModuleList(self.stages)
         
-        self.deconv_embed = UpSample(res,2*dim,dim_out,norm_layer,act_layer)
+#         self.deconv_embed = UpSample(res,2*dim,dim_out,norm_layer,act_layer)
 
-    def forward(self,skips):
-        l = len(skips)
-        for i in range(l - 1):
-            att = skips[-i-1]
-            if i == 0:
-                x = att
-            # print(att.shape,x_l.shape,x.shape)
-            # exit(0)
-            x = self.stages[i](att,x)
+#     def forward(self,skips):
+#         l = len(skips)
+#         for i in range(l - 1):
+#             att = skips[-i-1]
+#             if i == 0:
+#                 x = att
+#             # print(att.shape,x_l.shape,x.shape)
+#             # exit(0)
+#             x = self.stages[i](att,x)
         
-        x = torch.cat([x,skips[0]],dim=1) # B 2C H W
-        x = self.deconv_embed(x)
+#         x = torch.cat([x,skips[0]],dim=1) # B 2C H W
+#         x = self.deconv_embed(x)
 
-        return x
+#         return x
 
 class DAFN(nn.Module):
     def __init__(self, img_size=224, dim_in=1, dim_out=9, embed_dim=16,
@@ -179,8 +180,7 @@ class DAFN(nn.Module):
         dim = self.encoder.final_dim
         split_size.reverse()
         num_heads.reverse()
-        self.decoder = Decoder(res,dim,dim_out,split_size,num_heads,
-                               qkv_bias,qk_scale,act_layer,norm_layer)
+        self.decoder = Decoder([512,256,128,64], dim_out)
         
     def forward(self,img):
         return self.decoder(self.encoder(img))
