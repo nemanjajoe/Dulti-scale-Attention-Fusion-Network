@@ -58,7 +58,7 @@ class MlpMixer(nn.Module):
     def __init__(self,seq_len, dim) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
-        self.token_mixer = nn.Conv1d(dim,dim,3)
+        self.token_mixer = nn.Conv1d(dim,dim,1)
         # self.act1 = nn.GELU()
         self.norm2 = nn.LayerNorm(dim)
         self.channel_mixer = nn.Linear(dim,dim)

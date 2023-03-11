@@ -47,29 +47,86 @@ class EncoderFusionStage(nn.Module):
 
         return torch.cat([att_h,att_l], dim=1)
 
+class FirstFusionStage(nn.Module):
+    def __init__(self, dim_in, embed_dim, res, split_size_h, split_size_l,
+                 num_heads_h, num_heads_l, qkv_bias=False, qk_scale=None,
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm, last_stage=False,depth=1) -> None:
+        super().__init__()
+        res = res//2
+        self.ope = nn.Sequential(
+            nn.Conv2d(dim_in,embed_dim,3,2,1),
+            nn.LayerNorm([embed_dim,res,res])
+        )
+        dim = embed_dim
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(dim, dim, 3,2,1)
+            # nn.GELU() # ???
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(dim,dim,3,2,1)
+            # nn.GELU()
+        )
+        res = res//2
+        self.dual_fusion = []
+        for i in range(depth):
+            self.dual_fusion.append(DualBlock(dim,res,split_size_h,split_size_l,num_heads_h,num_heads_l,
+                                     qkv_bias,qk_scale,act_layer,norm_layer,last_stage))
+
+        self.dual_fusion = nn.ModuleList(self.dual_fusion)
+        self.img2token = Rearrange("b c h w -> b (h w) c")
+        self.token2img = Rearrange("b (h w) c -> b c h w", h=res,w=res)
+        
+    def forward(self,x):
+        """
+        Args: 
+            x: B C H W
+        Returns:
+            x: B C H W
+        """
+        x = self.ope(x)
+        x_l = self.conv1(x)
+        x_h = self.conv2(x)
+        att_l = self.img2token(x_l)
+        att_h = self.img2token(x_h)
+        for fusion in self.dual_fusion:
+            att_h,att_l = fusion(att_h,att_l)
+
+        att_h = self.token2img(att_h) + x_h
+        att_l = self.token2img(att_l) + x_l
+        return torch.cat([att_h,att_l], dim=1)
+
+        
+
 class Encoder(nn.Module):
     def __init__(self, img_size=224, dim_in=1, embed_dim=32,
                  split_size=[1,2,2,7], num_heads=[2,4,8,16],depth=[2,3,8,3], qkv_bias=False, qk_scale=None,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
         super().__init__()
-        res = img_size//2
-        self.conv_embed = nn.Sequential(
-            nn.Conv2d(dim_in,embed_dim,3,2,1),
-            nn.LayerNorm([embed_dim,res,res])
-        )
-        dim = embed_dim
+        # res = img_size//2
+        # self.conv_embed = nn.Sequential(
+        #     nn.Conv2d(dim_in,embed_dim,3,2,1),
+        #     nn.LayerNorm([embed_dim,res,res])
+        # )
+        # dim = embed_dim
         self.stages = []
         assert(len(split_size) == len(num_heads))
         stage_len = len(split_size)
+        last_stage = False
         for i in range(stage_len):
-            last_stage = False
-            
             s_h = split_size[stage_len-i-1]
             s_l = split_size[i]
             n_h = num_heads[stage_len-i-1]
             n_l = num_heads[i]
 
-            stage = EncoderFusionStage(dim,2*dim,res,s_h,s_l,n_h,n_l,qkv_bias,qk_scale,
+            if i == 0:
+                stage = FirstFusionStage(dim_in, embed_dim, img_size,s_h,s_l,n_h,n_l,qkv_bias,qk_scale,
+                                         act_layer,norm_layer,last_stage,depth[i])
+                res = img_size//4
+                dim = embed_dim*2
+                self.stages.append(stage)
+                continue
+            else:
+                stage = EncoderFusionStage(dim,2*dim,res,s_h,s_l,n_h,n_l,qkv_bias,qk_scale,
                                        act_layer,norm_layer,last_stage,depth[i])
             res = res//2
             dim = dim*2
@@ -79,7 +136,7 @@ class Encoder(nn.Module):
         self.final_res = res
         self.final_dim = dim
     
-    def forward(self,img):
+    def forward(self,x):
         """
         Args:
             img: B C H W
@@ -88,8 +145,8 @@ class Encoder(nn.Module):
                 att,x_l: B C H W  
         """
         skips = []
-        x = self.conv_embed(img)
-        skips.append(x)
+        # x = self.conv_embed(img)
+        # skips.append(x)
 
         for stage in self.stages:
             x = stage(x)
@@ -170,7 +227,7 @@ class Encoder(nn.Module):
 #         return x
 
 class DAFN(nn.Module):
-    def __init__(self, img_size=224, dim_in=1, dim_out=9, embed_dim=16,
+    def __init__(self, img_size=224, dim_in=1, dim_out=9, embed_dim=32,
                  split_size=[1,2,2,7], num_heads=[2,4,8,16],depth=[1,2,4,2],qkv_bias=False, qk_scale=None,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm) -> None:
         super().__init__()
@@ -180,7 +237,7 @@ class DAFN(nn.Module):
         dim = self.encoder.final_dim
         split_size.reverse()
         num_heads.reverse()
-        self.decoder = Decoder([512,256,128,64], dim_out)
+        self.decoder = Decoder([16*embed_dim,8*embed_dim,4*embed_dim,2*embed_dim], dim_out)
         
     def forward(self,img):
         return self.decoder(self.encoder(img))
