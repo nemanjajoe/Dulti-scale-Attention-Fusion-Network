@@ -10,7 +10,7 @@ import scipy.ndimage as ndimage
 import PySimpleGUI as sg
 from einops import rearrange
 from config import DAFNet_synapse_version1_cls9_v3 as hyper
-from trainner import Trainer_synapse
+from trainer import Trainer_synapse
 
 net = Trainer_synapse("D:\\Projects\\datasets\\Synapse_npy",hyper)
 
